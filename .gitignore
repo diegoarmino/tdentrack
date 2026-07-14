@@ -1,0 +1,26 @@
+# This workspace contains real ORCA calculations and generated reports.
+# Keep the repository focused on TDenTrack source, docs, and tests.
+
+*
+
+!.gitignore
+!README.md
+!pyproject.toml
+!orca_diabatize.py
+
+!docs/
+!docs/**
+
+!excited_state_diabatizer/
+!excited_state_diabatizer/*.py
+!excited_state_diabatizer/tests/
+!excited_state_diabatizer/tests/*.py
+
+# Never track generated Python caches.
+__pycache__/
+*.py[cod]
+
+# Never track local packaging products.
+*.egg-info/
+build/
+dist/

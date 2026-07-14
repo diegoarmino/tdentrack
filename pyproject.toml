@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tdentrack"
+version = "0.1.0"
+description = "Transition-density based excited-state tracking and diabatization for ORCA TDDFT scans."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "Diego Armino" }
+]
+dependencies = [
+  "numpy",
+  "scipy"
+]
+
+[project.optional-dependencies]
+visualization = [
+  "pyscf"
+]
+dev = [
+  "pyscf"
+]
+
+[project.scripts]
+tdentrack = "excited_state_diabatizer.cli:main"
+orca-diabatize = "excited_state_diabatizer.cli:main"
+
+[tool.setuptools]
+packages = ["excited_state_diabatizer"]
