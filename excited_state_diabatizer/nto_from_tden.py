@@ -268,6 +268,11 @@ def _active_range(state: dict, spin: str, kind: str) -> Tuple[int, int]:
         key = f"{spin[0]}_{kind}_range"
     if key not in state:
         raise MissingDataError(f"Missing {spin} {kind} active MO range in CIS/TDA amplitude record.")
+    index_base = int(state.get("orbital_index_base", 0))
+    if index_base != 0:
+        raise MissingDataError(
+            f"Unsupported CIS/TDA orbital index base {index_base}; TDenTrack active MO ranges are zero-based and inclusive."
+        )
     start, end = state[key]
     return int(start), int(end)
 
@@ -277,13 +282,11 @@ def _active_mo_block(coefficients: np.ndarray, active_range: Tuple[int, int], ex
     if coeffs.ndim != 2:
         raise MissingDataError(f"{spin} MO coefficient block is not two-dimensional.")
     start, end = active_range
-    start0 = start - 1
-    end0 = end
-    if start0 < 0 or end0 > coeffs.shape[1] or start > end:
+    if start < 0 or end >= coeffs.shape[1] or start > end:
         raise MissingDataError(
             f"{spin} {kind} active MO range {start}..{end} is incompatible with {coeffs.shape[1]} available MO columns."
         )
-    block = coeffs[:, start0:end0]
+    block = coeffs[:, start : end + 1]
     if block.shape[1] != expected_width:
         raise MissingDataError(
             f"{spin} {kind} active MO range {start}..{end} gives {block.shape[1]} columns, "

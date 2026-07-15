@@ -12,6 +12,7 @@ from excited_state_diabatizer.models import AssignmentEdge, JobRecord, NTOOrbita
 from excited_state_diabatizer.molden_io import parse_molden
 from excited_state_diabatizer.nto_from_tden import derive_self_nto_state, derive_self_ntos_from_tden_steps
 from excited_state_diabatizer.orca_io import parse_ci_coefficients, parse_nto_blocks, parse_tddft_output
+from excited_state_diabatizer.overlap import cis_transition_density_overlap_matrix
 from excited_state_diabatizer.report import write_outputs
 from excited_state_diabatizer.segments import build_track_segments, make_reversed_matrix_provider
 from excited_state_diabatizer.tracking import (
@@ -266,7 +267,7 @@ s 1 1.0
                 """
 STATE  1:  E=   0.100000 au      2.721 eV     1.0 cm**-1
      2a -> 4a  :     0.160000 (c=  0.40000000)
-     1b -> 3b  :     0.360000 (c=  0.60000000)
+     0b -> 2b  :     0.360000 (c=  0.60000000)
 
 STATE  2:  E=   0.200000 au      5.442 eV     2.0 cm**-1
      1a -> 3a  :     0.010000 (c= -0.10000000)
@@ -278,16 +279,17 @@ STATE  2:  E=   0.200000 au      5.442 eV     2.0 cm**-1
         self.assertEqual(header.alpha_size, 4)
         self.assertEqual(checks_header.raw_ints, header.raw_ints)
         self.assertEqual(sorted(amps), [1, 2])
+        self.assertEqual(amps[1]["orbital_index_base"], 0)
         self.assertTrue(np.isclose(coefficient_from_amplitudes(header, amps[1], 2, "a", 4, "a"), 0.4))
-        self.assertTrue(np.isclose(coefficient_from_amplitudes(header, checked_amps[1], 1, "b", 3, "b"), 0.6))
+        self.assertTrue(np.isclose(coefficient_from_amplitudes(header, checked_amps[1], 0, "b", 2, "b"), 0.6))
         self.assertTrue(all(row.passed for row in checks))
 
     def test_self_nto_svd_reconstructs_transition_density(self):
         state = {
             "root": 1,
             "alpha": np.array([[1.0, 2.0], [3.0, 4.0]]),
-            "alpha_occ_range": (1, 2),
-            "alpha_virt_range": (3, 4),
+            "alpha_occ_range": (0, 1),
+            "alpha_virt_range": (2, 3),
             "source_file": Path("job.cis"),
         }
         mo = {"alpha": np.eye(4)}
@@ -299,12 +301,13 @@ STATE  2:  E=   0.200000 au      5.442 eV     2.0 cm**-1
         self.assertLess(recon[0].relative_error, 1.0e-12)
         self.assertTrue(all(weights[i].weight >= weights[i + 1].weight for i in range(len(weights) - 1)))
 
-    def test_self_nto_uses_one_based_cis_active_mo_ranges(self):
+    def test_self_nto_uses_zero_based_cis_active_mo_ranges(self):
         state = {
             "root": 1,
             "alpha": np.array([[1.0, 0.0], [0.0, 0.0]]),
-            "alpha_occ_range": (2, 3),
-            "alpha_virt_range": (4, 5),
+            "alpha_occ_range": (1, 2),
+            "alpha_virt_range": (3, 4),
+            "orbital_index_base": 0,
             "source_file": Path("job.cis"),
         }
         mo = {"alpha": np.eye(5)}
@@ -315,15 +318,41 @@ STATE  2:  E=   0.200000 au      5.442 eV     2.0 cm**-1
         self.assertTrue(np.allclose(np.abs(vec.pairs[0].acceptor_coeff), [0.0, 0.0, 0.0, 1.0, 0.0]))
         self.assertTrue(weights[0].selected)
 
+    def test_cis_transition_density_overlap_uses_zero_based_ranges(self):
+        # A[0, 0] and B[1, 1] both describe MO 1 -> MO 3 only when the
+        # inclusive active ranges are interpreted as zero-based.
+        state_a = {
+            "alpha": np.array([[1.0, 0.0], [0.0, 0.0]]),
+            "alpha_occ_range": (1, 2),
+            "alpha_virt_range": (3, 4),
+            "orbital_index_base": 0,
+        }
+        state_b = {
+            "alpha": np.array([[0.0, 0.0], [0.0, 1.0]]),
+            "alpha_occ_range": (0, 1),
+            "alpha_virt_range": (2, 3),
+            "orbital_index_base": 0,
+        }
+        mat = cis_transition_density_overlap_matrix(
+            {1: state_a},
+            {1: state_b},
+            [1],
+            {"alpha": np.eye(5)},
+            {"alpha": np.eye(5)},
+            np.eye(5),
+        )
+        self.assertEqual(mat.shape, (1, 1))
+        self.assertTrue(np.isclose(mat[0, 0], 1.0))
+
     def test_self_nto_selection_is_global_across_spin_blocks(self):
         state = {
             "root": 1,
             "alpha": np.eye(2),
             "beta": 0.01 * np.eye(2),
-            "alpha_occ_range": (1, 2),
-            "alpha_virt_range": (3, 4),
-            "beta_occ_range": (1, 2),
-            "beta_virt_range": (3, 4),
+            "alpha_occ_range": (0, 1),
+            "alpha_virt_range": (2, 3),
+            "beta_occ_range": (0, 1),
+            "beta_virt_range": (2, 3),
             "source_file": Path("job.cis"),
         }
         mo = {"alpha": np.eye(4), "beta": np.eye(4)}
@@ -341,8 +370,8 @@ STATE  2:  E=   0.200000 au      5.442 eV     2.0 cm**-1
             step.tden_vectors[1] = {
                 "root": 1,
                 "alpha": np.eye(2),
-                "alpha_occ_range": (1, 2),
-                "alpha_virt_range": (3, 4),
+                "alpha_occ_range": (0, 1),
+                "alpha_virt_range": (2, 3),
                 "source_file": source,
             }
             step.mo_coefficients = {"alpha": np.eye(4)}
@@ -570,7 +599,7 @@ def _set_self_nto_purity(step, root, weights):
 
 
 def _write_synthetic_cis(path: Path) -> None:
-    header = (2, 1, 2, 3, 4, 1, 1, 2, 3, 6, 0, 3, 0, 0, 0)
+    header = (2, 1, 2, 3, 4, 0, 0, 1, 2, 6, 0, 3, 0, 0, 0)
     root1 = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
     root2 = [-0.1, -0.2, -0.3, -0.4, -0.5, -0.6]
     doubles = [0.1, 0.0] + root1 + [0.0, 0.0, 0.0, 0.2, 0.0] + root2

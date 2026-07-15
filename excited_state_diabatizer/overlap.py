@@ -116,6 +116,12 @@ def cis_transition_density_overlap_matrix(
     mo_b: Dict[str, np.ndarray],
     s_ao_ab: np.ndarray,
 ) -> np.ndarray:
+    """Return normalized CIS/TDA overlaps using zero-based active MO ranges.
+
+    The inclusive ranges in each transition-density record are copied directly
+    from ORCA's ``.cis`` header.  They therefore index the columns of the MO
+    coefficient matrices without a one-based-to-zero-based conversion.
+    """
     roots = list(roots)
     s_mo = {}
     for spin in ("alpha", "beta"):
@@ -207,8 +213,17 @@ def _range_slice(state: dict, spin: str, kind: str) -> slice:
         key = f"{short}_{kind}_range"
     if key not in state:
         raise ValueError(f"Missing {spin} {kind} orbital range in transition-density record.")
+    index_base = int(state.get("orbital_index_base", 0))
+    if index_base != 0:
+        raise ValueError(
+            f"Unsupported CIS/TDA orbital index base {index_base}; TDenTrack active MO ranges are zero-based and inclusive."
+        )
     start, end = state[key]
-    return slice(int(start), int(end) + 1)
+    start = int(start)
+    end = int(end)
+    if start < 0 or end < start:
+        raise ValueError(f"Invalid zero-based {spin} {kind} orbital range {start}..{end}.")
+    return slice(start, end + 1)
 
 
 def _spin_key(spin: str) -> str:

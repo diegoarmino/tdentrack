@@ -8,9 +8,9 @@ The central design rule is simple: state identity is assigned from numerical wav
 
 ## 1. Scope
 
-TDenTrack reads completed ORCA TDDFT calculations and builds state-state similarity matrices between scan points. It then assigns adiabatic roots into diabatic tracks using global one-to-one matching, while explicitly reporting low-confidence assignments, mixed manifolds, and locally stable branch segments.
+TDenTrack reads completed ORCA TDDFT calculations and builds state-state similarity matrices between scan points. It then assigns adiabatic roots into diabatic tracks using global one-to-one matching, while explicitly reporting low-confidence assignments, mixed manifolds, and locally stable branch segments. It also provides an experimental transactional selection API used by the accompanying pysisyphus integration for live excited-state optimization.
 
-The tool does not rerun TDDFT calculations. It may call ORCA utilities, and for the trusted overlap backend it may run small auxiliary ORCA jobs used only to extract cross-geometry AO overlap matrices.
+The established scan-analysis CLI does not rerun the production TDDFT calculations. It may call ORCA utilities, and for the trusted overlap backend it may run small auxiliary ORCA jobs used only to extract cross-geometry AO overlap matrices. The optimizer-facing Python API is different: its pysisyphus adapter deliberately launches isolated all-root surveys and selected-root gradient calculations.
 
 Supported layout:
 
@@ -137,6 +137,50 @@ The occupied and virtual subblocks of `S_MO_AB` contract the CIS/TDA amplitude m
 sum_ia,jb T_A(ia) S_occ_AB(i,j) S_virt_AB(a,b) T_B(jb)
 ```
 
+The active occupied and virtual ranges stored in an ORCA `.cis` header are
+**zero-based and inclusive**. TDenTrack preserves that convention internally;
+for example, the range `6..20` selects MO coefficient columns `6:21`. This is
+the same numbering used for CI contributions printed by ORCA and must not be
+shifted when reconstructing NTOs.
+
+The binary reader auto-detects both the historical 15-integer unrestricted-TDA
+layout and ORCA's standard vector-record layout. The latter has been regression
+tested against a real restricted singlet-plus-triplet .cis file produced by
+ORCA 6.1.1. In a standard file, multiplicity is read from every vector record
+and roots are exposed in the global STATE N order printed in job.out.
+This ordering is deliberate: ORCA 6.1.1 can repeat the stored internal iroot
+value in the triplet block, so iroot alone cannot identify the printed root.
+Each parsed state therefore also records a stable one-based
+root_within_multiplicity ordinal for translating a global output root to the
+corresponding singlet or triplet root window. The dictionary key, root, and
+global_root fields are the mixed-file STATE N label; they must not be passed
+directly to ORCA's excited-state gradient IRoot when more than one multiplicity
+is present. Use the identical multiplicity-local orca_gradient_iroot field for
+the ORCA gradient input. For example, global triplet STATE 4 in a file with two
+preceding singlets has orca_gradient_iroot=2, not 4.
+The pysisyphus calculator adapter must perform this mapping before setting its
+ORCA root/IRoot value.
+When all requested output roots have the same printed multiplicity, TDenTrack
+uses it as a parser filter and verifies the binary/output multiplicities and
+excitation energies agree.
+
+The binary format has no explicit TDA flag. In the special case of two
+same-energy records with the same stored root and multiplicity, the bytes alone
+cannot distinguish one non-TDA X+Y/X-Y pair from two exactly degenerate TDA
+roots. Validation reads ORCA's printed Tamm-Dancoff status to resolve that case;
+direct parser users must pass an explicit tda=True or tda=False hint. The
+parser refuses to guess when the case remains ambiguous.
+
+For a restricted standard file, ORCA writes -1 sentinels instead of beta
+active-orbital ranges and stores one spin-adapted spatial vector. TDenTrack
+mirrors the alpha ranges for beta and reconstructs equal alpha/beta blocks,
+each scaled by 1/sqrt(2) so their combined squared norm remains one. Printed
+c= validation rescales a block back to ORCA's spatial coefficient. The
+manifest records the layout, restriction flag, TDA flag, stored-vector count,
+and available multiplicities. Truncated files, trailing data, non-finite
+coefficients, inconsistent vector sizes, and multiplicity mismatches fail
+closed. Spin-flip standard vectors are not currently supported.
+
 The final value is normalized and absolute-valued. This makes the metric insensitive to arbitrary global phase changes in the transition vector.
 
 ### 5.2 `nto-json`
@@ -175,12 +219,31 @@ The trusted implementation uses `orca-auxiliary` for `tden-json` and `nto-json`:
 4. Run `orca_2json` with overlap export enabled.
 5. Extract the off-diagonal AO overlap block.
 6. Validate that the diagonal blocks reproduce the same-geometry AO overlap matrices already exported for A and B.
+7. Validate that the two off-diagonal blocks are mutual transposes within the same numerical tolerance.
+
+An auxiliary result is accepted only when ORCA exits successfully, prints its
+`ORCA TERMINATED NORMALLY` marker, produces the GBW, and `orca_2json` exits
+successfully and produces the JSON export. A leftover GBW from an interrupted
+calculation is therefore not sufficient for acceptance.
 
 The extracted cross block is cached in:
 
 ```text
-OUTDIR/json_cache/cross_pXXX_pYYY.json
+OUTDIR/json_cache/cross_pXXX_pYYY_<input-hash>.json
 ```
+
+The hash covers the generated auxiliary input, including both geometries,
+their charge, and the AO basis directives. Reusing a step label after changing
+a geometry or basis cannot silently select the old matrix. Legacy unhashed
+cache files are intentionally not reused.
+
+Both source calculations must use identical basis specifications. TDenTrack
+reads all ORCA `!` input lines and preserves a `%basis` block, including nested
+`NewGTO`, `NewAuxGTO`, and `NewECP` sections. Unusual atom-index-specific,
+external-file, ECP, or relativistic basis inputs still require inspection of
+the generated `cross.inp` and validation against a real ORCA fixture. The
+mandatory diagonal-block checks are the final guard against a basis ordering
+or duplication error.
 
 Auxiliary logs are saved in:
 
@@ -300,6 +363,90 @@ Candidate manifolds are reported with a subspace score:
 ```text
 S_subspace = || S[P,Q] ||_F / sqrt(size)
 ```
+
+This Frobenius score is the legacy scan-reporting heuristic. Optimizer-facing
+code can use the stricter, signed principal-angle analysis in
+`excited_state_diabatizer.state_tracking`. Given the full root-to-root block
+`O` between reference roots `P` and candidate roots `Q`, use:
+
+```python
+from excited_state_diabatizer import analyze_subspace_continuity
+
+continuity = analyze_subspace_continuity(
+    O,
+    reference_roots=P,
+    candidate_roots=Q,
+    reference_norms=norms_P,
+    candidate_norms=norms_Q,
+    # Supply these for non-orthogonal transition-density descriptors:
+    reference_gram=gram_P,
+    candidate_gram=gram_Q,
+)
+```
+
+The utility first normalizes the overlap block while retaining every sign. If
+self-overlap Gram matrices are supplied, it symmetrically orthonormalizes both
+sets and then performs an SVD. The singular values are cosines of the principal
+angles between the manifolds. A root rotation, phase flip, or permutation can
+therefore give singular values near one even when individual-root assignment
+is ambiguous. The conservative continuity score is
+`continuity.minimum_singular_value`; the corresponding diagnostic is
+`continuity.maximum_principal_angle_deg`.
+
+If Gram matrices are omitted, roots within each set are assumed orthogonal in
+the chosen overlap metric. That assumption is not generally valid for simple
+Frobenius overlaps of transition densities, so rigorous manifold decisions
+should calculate the within-geometry root-root Gram blocks as well as the
+cross-geometry block.
+
+An optimization survey can attach this immutable result through
+`StateSurvey.subspace_continuity`. Setting, for example,
+`SelectionConfig(min_subspace_singular_value=0.80)` makes it an explicit gate:
+a near-degenerate pair is reported as `MANIFOLD` only when every principal
+direction passes. Missing, dimension-mismatched, or weak subspace information
+returns `RETRY`. A `MANIFOLD` decision always has `selected_root=None` and
+cannot be committed by `TrackingSession`; it is evidence of manifold
+continuity, not permission to calculate or commit an arbitrary root gradient.
+
+For production optimization, attach the complete root windows instead of
+preselecting a manifold in the backend:
+
+```python
+from excited_state_diabatizer import RootOverlapBlock
+
+root_overlaps = RootOverlapBlock(
+    reference_roots=reference_roots,
+    candidate_roots=candidate_roots,
+    overlaps=signed_cross_block,
+    reference_gram=reference_self_overlap_block,
+    candidate_gram=candidate_self_overlap_block,
+)
+survey = session.survey(
+    candidate_snapshot,
+    signed_selected_root_overlaps,
+    root_overlap_block=root_overlaps,
+)
+```
+
+`RootOverlapBlock` validates and immutably owns the signed cross block and both
+full self-overlap Gram matrices. Once scalar scores and energies reveal a
+candidate manifold, `select_state` derives the reference manifold from roots
+of the same multiplicity lying within `manifold_gap_ev` of the selected
+reference root, extracts exactly that sub-block, and calculates its principal
+angles. Thus a four-root calculation can analyze only the rotating two-state
+manifold without the other roots diluting its score. `RootOverlapBlock.analyze`
+and `.subset` expose the same operation for offline diagnostics.
+
+With `require_equal_subspace_dimensions=True` (the default), unavailable
+reference energy gaps or unequal reference/candidate manifold sizes produce
+`RETRY`; these conditions can indicate an incomplete root window or a genuine
+split/merge region. If the selected reference multiplicity is known, candidate
+roots with missing multiplicity metadata are ineligible rather than being
+silently assumed to match.
+
+`SelectionDecision.signed_normalized_scores` retains the signed one-root
+overlaps used before absolute-value ranking. This is required for later polar
+or SVD transport even though ordinary root ranking remains phase-insensitive.
 
 Outputs:
 
@@ -531,3 +678,46 @@ python orca_diabatize.py --help
 5. Treat grey/dashed tracks and low similarity as warnings, not as inconveniences to hide.
 6. If a critical state disappears into a manifold or beyond the root window, add intermediate scan points or include more TDDFT roots.
 7. Use NTO images to interpret state character, not to override failed numerical continuity.
+
+## 20. Experimental Excited-State Optimization
+
+The implementation is divided at a transactional boundary:
+
+- pysisyphus owns the geometry, RFO model, trust radius, convergence checks, and optimizer history;
+- ORCA 6.1.1 supplies an all-root energy survey and the gradient for the root selected at an accepted endpoint;
+- TDenTrack owns immutable electronic snapshots, root/manifold decisions, and commit authorization.
+
+This differs from running a one-cycle native ORCA optimizer. It keeps every trial geometry visible to the same state selector and prevents a rejected trial from changing the tracked root, GBW reference, or quasi-Newton history. ORCA `ExtOpt` is not used: that facility replaces the energy/gradient provider while leaving ORCA in charge of geometry optimization, whereas this design needs pysisyphus to inspect several possible endpoints before one enters optimizer history.
+
+### 20.1 One optimization transaction
+
+For each gradient-evaluated geometry:
+
+1. pysisyphus constructs its normal optimizer proposal.
+2. The unscaled endpoint is surveyed first by an isolated, energy-only ORCA all-root job.
+3. ORCA BSON wavefunctions at the committed and proposed geometries provide the analytic cross matrix `S_AB = <AO(A)|AO(B)>`. This is the same adjacent-geometry superposition quantity sought by a double-molecule calculation, but it is evaluated directly from the two retained shell sets with `Wavefunction.S_with`. Atom order, coordinates, shell definitions, ECP data, AO ordering, MO orthonormality, and forward/reverse transpose symmetry are checked before it is used.
+4. The `.cis` amplitudes, `S_AB`, and the two same-geometry metrics produce a full signed root-overlap block plus both root self-overlap Gram matrices.
+5. `TrackingSession` returns `ACCEPT`, `MANIFOLD`, `RETRY`, or `HALT`. Only `ACCEPT` carries a committable root.
+6. pysisyphus stages the selected endpoint and requests an ORCA `EnGrad` calculation using the root's multiplicity-local `IRoot`. For triplets it also forces `IRootMult triplet`; `Triplets true` alone does not make ORCA 6.1.1's `IRoot` select the triplet block.
+7. A finite, geometry-matched successful gradient atomically commits both the electronic snapshot and geometry step. Before commitment, the adapter verifies normal termination and agreement among ORCA's echoed `IRoot`/`IRootMult`, `DE(CIS)` root marker, and state-of-interest report. `FollowIRoot true` and `TGradList` are rejected. Failure restores the prior root and leaves the snapshot uncommitted.
+
+All-root surveys retain their input, output, CIS, BSON, GBW, and a JSON audit manifest in unique directories. Restart data serialize only the last committed snapshot; pending or merely staged trials must be surveyed again.
+
+### 20.2 Mixed and near-degenerate regions
+
+The default step controller surveys the optimizer's factor `1.0` proposal first. If that endpoint is uniquely identified and descending, it is used without launching fallback jobs. If it is mixed, weak, incomplete, or uphill, a bounded set of shorter and longer factors can be evaluated. This implements both ways of leaving a narrow mixing region: approach it more cautiously or bridge to a clean endpoint beyond it.
+
+Fallback endpoints still have to pass root-window completeness, multiplicity, normalized-overlap, assignment-margin, energy, and maximum-step guards. Among acceptable fallbacks, the lowest state energy is preferred. A larger factor does not receive special permission merely because it leaves the mixed region; users who intentionally allow it beyond the optimizer's trust maximum must set an explicit overall step bound.
+
+When close roots form a candidate manifold, the selector extracts the matching same-spin, energy-local reference and candidate subsets from the full `RootOverlapBlock` and evaluates their principal angles. This confirms continuity of the *manifold*, not a unique member of it. The decision therefore remains noncommittable and the controller tries another bounded endpoint. Missing energy gaps, unequal manifold dimensions, weak minimum singular values, or an exhausted factor set stop the optimization for inspection rather than forcing a root.
+
+### 20.3 Scope and current limitations
+
+- The integration is an opt-in Python API in the modified pysisyphus fork; it is not yet a stable YAML or TDenTrack CLI workflow.
+- The built-in backend is deliberately version-gated to ORCA 6.1.1 and assumes a fixed atom order, basis/ECP definition, charge, multiplicity, and contiguous multiplicity-local root window.
+- Point charges and other per-call Hamiltonian inputs must be supplied identically to surveys and gradients.
+- Spin-flip CIS vectors are unsupported. Restricted ORCA 6.1.1 TDA is covered by a real binary fixture; non-TDA and unrestricted branches also have synthetic parser regressions but should be fixture-validated for the intended production method.
+- The legacy pysisyphus `track: true` ORCA implementation uses its older mutable tracker and raw-GBW parser. It is not part of this transaction path and should not be substituted for `TDenTrackORCA` under ORCA 6.1.1.
+- A clean endpoint reached by a longer step is a state-following heuristic, not a multistate treatment of a conical intersection or genuinely degenerate surface.
+
+The concrete bootstrap and calculator construction example is in `docs/es_optimization.rst` in the modified pysisyphus fork.

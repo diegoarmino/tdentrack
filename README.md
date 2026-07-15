@@ -1,6 +1,6 @@
 # TDenTrack
 
-TDenTrack is a numerical excited-state tracking and diabatization post-processor for ORCA TDDFT scans. It is designed for completed ORCA scan or optimization directories and does not rerun the TDDFT jobs it analyzes.
+TDenTrack provides numerical excited-state tracking and diabatization for ORCA TDDFT data. Its established command-line workflow is a post-processor for completed scan or optimization directories. It now also exposes an experimental transactional state-selection API for excited-state geometry optimization with the accompanying pysisyphus integration.
 
 The trusted engine is transition-density overlap from ORCA `job.cis` amplitudes plus ORCA-generated cross-geometry AO overlaps. Self-derived NTOs are reconstructed from the same CIS/TDA amplitudes for diagnostics and visualization, avoiding the `.nto` JSON indexing ambiguity that motivated this tool.
 
@@ -61,6 +61,18 @@ The output directory contains:
 ## Manual
 
 See [docs/MANUAL.md](docs/MANUAL.md) for the current scientific model, command-line reference, output definitions, diagnostics, and known limitations.
+
+## Experimental ORCA 6.1.1 Optimization
+
+The optimizer-facing API separates geometry proposals from electronic-state commitment:
+
+1. pysisyphus proposes an RFO step.
+2. An isolated ORCA 6.1.1 all-root calculation evaluates the proposed geometry.
+3. Exact adjacent-geometry AO overlaps, signed transition-density overlaps, energies, and multiplicities are passed to `TrackingSession`.
+4. A unique accepted root is used for an ORCA `EnGrad` calculation. Only a successful gradient commits the new electronic reference and optimizer step.
+5. If the original endpoint is mixed, weak, or uphill, bounded shorter and longer proposals can be surveyed. A near-degenerate manifold is never committed as an arbitrary single root.
+
+This is currently a Python API rather than a TDenTrack CLI command. The implementation and runnable setup contract are documented in `docs/es_optimization.rst` in the modified pysisyphus fork. The legacy pysisyphus `track: true` ORCA route is separate and is not used by this backend.
 
 ## Scientific Caution
 

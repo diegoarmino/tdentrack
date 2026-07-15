@@ -505,7 +505,14 @@ def _load_tden_json_or_fail(
                 cis_checks.extend(rows)
                 failed_rows = [row for row in rows if not row.passed]
                 manifest = outdir / "json_cache" / f"{job.label}_cis_tden_manifest.json"
-                write_cis_manifest(manifest, cis_path, header, list(amplitudes), rows)
+                write_cis_manifest(
+                    manifest,
+                    cis_path,
+                    header,
+                    list(amplitudes),
+                    rows,
+                    amplitudes=amplitudes,
+                )
                 if failed_rows:
                     statuses.append(
                         ExtractionStatus(
