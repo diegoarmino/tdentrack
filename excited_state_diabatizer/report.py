@@ -838,7 +838,7 @@ def _line_svg(series, ylabel: str = "Energy", x_labels: Optional[dict] = None) -
     xs = [_point_x(p) for _, pts in series for p in pts if _point_y(p) is not None]
     if not vals or not xs:
         return "<p><em>No energy values available.</em></p>"
-    w, h = 860, 340
+    w, h = 860, 540
     left, right, top, bottom = 56, 92, 34, 58
     plot_w = w - left - right
     plot_h = h - top - bottom

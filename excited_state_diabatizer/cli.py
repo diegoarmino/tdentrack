@@ -105,6 +105,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="When a track becomes provisional, compare the next step to the last stable anchor instead of the mixed previous root.",
     )
     ap.add_argument("--no-ambiguity-rescue", dest="ambiguity_rescue", action="store_false")
+    ap.add_argument("--degeneracy-guard", dest="degeneracy_guard", action="store_true", default=True, help="Flag NTO-mixed states as ambiguous only if they are near-degenerate.")
+    ap.add_argument("--no-degeneracy-guard", dest="degeneracy_guard", action="store_false")
+    ap.add_argument("--degeneracy-gap-ev", type=float, default=0.05, help="Energy gap threshold for near-degeneracy detection.")
+    ap.add_argument("--dynamic-anchor-restart", dest="dynamic_anchor_restart", action="store_true", default=True, help="Restart anchor if local similarity is exceptionally high.")
+    ap.add_argument("--no-dynamic-anchor-restart", dest="dynamic_anchor_restart", action="store_false")
+    ap.add_argument("--dynamic-restart-threshold", type=float, default=0.90, help="Minimum local similarity to trigger dynamic anchor restart.")
     ap.add_argument("--nto-weight-min", type=float, default=0.01)
     ap.add_argument("--nto-cumulative", type=float, default=0.995)
     ap.add_argument("--segment-min-purity", type=float, default=0.90, help="Minimum dominant self-derived NTO fraction for local branch segments.")
@@ -259,6 +265,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             nto_purity_guard=args.nto_purity_guard,
             nto_purity_threshold=args.nto_purity_threshold,
             ambiguity_rescue=args.ambiguity_rescue,
+            degeneracy_guard=args.degeneracy_guard,
+            degeneracy_gap_ev=args.degeneracy_gap_ev,
+            dynamic_anchor_restart=args.dynamic_anchor_restart,
+            dynamic_restart_threshold=args.dynamic_restart_threshold,
         )
         result = run_tracking(steps, roots, matrix_provider, config, args.engine)
         if not args.bidirectional:

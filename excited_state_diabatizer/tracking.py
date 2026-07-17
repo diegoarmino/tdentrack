@@ -35,6 +35,10 @@ class TrackingConfig:
     nto_purity_guard: bool = False
     nto_purity_threshold: float = 0.80
     ambiguity_rescue: bool = False
+    degeneracy_guard: bool = False
+    degeneracy_gap_ev: float = 0.05
+    dynamic_anchor_restart: bool = False
+    dynamic_restart_threshold: float = 0.90
 
 
 def hungarian_assignment(matrix: np.ndarray) -> List[Tuple[int, int]]:
@@ -181,7 +185,11 @@ def run_tracking(
                 similarity_to_previous=prev_sim,
                 similarity_to_anchor=anchor_sim,
             )
-            _apply_nto_purity_guard(edge, step_b, config)
+            if config.dynamic_anchor_restart and prev_sim >= config.dynamic_restart_threshold:
+                if edge.confidence in {"failed", "low_confidence"}:
+                    edge.confidence = "reliable"
+                    edge.reason = edge.reason + f"; local similarity {prev_sim:.3f} >= {config.dynamic_restart_threshold:.3f} overrides low global confidence"
+            _apply_mixed_degeneracy_guard(edge, step_b, roots, config)
             provisional_edges.append(edge)
 
         if config.subspace_detection:
@@ -297,6 +305,9 @@ def _score_matrix_for_step(
 def _can_update_anchor(edge: AssignmentEdge, config: TrackingConfig) -> bool:
     if edge.confidence != "reliable" or edge.manifold_id:
         return False
+    if config.dynamic_anchor_restart and edge.similarity_to_previous is not None:
+        if edge.similarity_to_previous >= config.dynamic_restart_threshold:
+            return True
     if edge.best_similarity < 0.65 or edge.margin < config.assignment_margin_threshold:
         return False
     if edge.similarity_to_anchor is not None and edge.similarity_to_anchor < 0.65:
@@ -304,22 +315,60 @@ def _can_update_anchor(edge: AssignmentEdge, config: TrackingConfig) -> bool:
     return True
 
 
-def _apply_nto_purity_guard(edge: AssignmentEdge, current_step: StepData, config: TrackingConfig) -> None:
+def _apply_mixed_degeneracy_guard(edge: AssignmentEdge, current_step: StepData, roots: Sequence[int], config: TrackingConfig) -> None:
     if not config.nto_purity_guard:
         return
+        
     purity = _dominant_nto_fraction(current_step, edge.root_b)
     if purity is None:
         edge.reason = edge.reason + "; no self-derived NTO purity diagnostic was available"
         return
+        
     if purity >= config.nto_purity_threshold:
         return
-    if edge.confidence != "failed":
-        edge.confidence = "ambiguous"
-    edge.reason = (
-        edge.reason
-        + f"; current root is NTO-mixed: dominant pair fraction {purity:.3f} "
-        f"< {config.nto_purity_threshold:.3f}; this point will not update the stable reference"
-    )
+        
+    if config.degeneracy_guard:
+        current_state = current_step.states.get(edge.root_b)
+        if not current_state or current_state.exc_ev is None:
+            return
+            
+        is_degenerate = False
+        degenerate_root = None
+        min_gap = float('inf')
+        
+        for other_root in roots:
+            if other_root == edge.root_b:
+                continue
+            other_state = current_step.states.get(other_root)
+            if not other_state or other_state.exc_ev is None:
+                continue
+                
+            gap = abs(current_state.exc_ev - other_state.exc_ev)
+            if gap < config.degeneracy_gap_ev:
+                is_degenerate = True
+                if gap < min_gap:
+                    min_gap = gap
+                    degenerate_root = other_root
+                    
+        if not is_degenerate:
+            return
+            
+        if edge.confidence != "failed":
+            edge.confidence = "ambiguous"
+        edge.reason = (
+            edge.reason
+            + f"; current root {edge.root_b} is NTO-mixed (purity {purity:.3f} < {config.nto_purity_threshold:.3f}) "
+            f"AND near-degenerate with root {degenerate_root} (gap {min_gap:.3f} eV < {config.degeneracy_gap_ev:.3f} eV); "
+            f"this point will not update the stable reference"
+        )
+    else:
+        if edge.confidence != "failed":
+            edge.confidence = "ambiguous"
+        edge.reason = (
+            edge.reason
+            + f"; current root is NTO-mixed: dominant pair fraction {purity:.3f} "
+            f"< {config.nto_purity_threshold:.3f}; this point will not update the stable reference"
+        )
 
 
 def _dominant_nto_fraction(step: StepData, root: int) -> Optional[float]:
