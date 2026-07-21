@@ -705,11 +705,25 @@ For each gradient-evaluated geometry:
 
 ORCA's TDDFT state table combines the printed `E(SCF)` with excitation
 energies, but its final EnGrad energy can include state-independent terms added
-later, notably D3(BJ). The backend anchors the bootstrap's selected root—and
-root zero in an energy-only survey—to `FINAL SINGLE POINT ENERGY`, then applies
-that common correction to every state. This preserves excitation energies and
-puts optimizer energies, descent tests, and fallback ranking on the same total-
-energy scale. The correction and anchor are retained in the audit metadata.
+later, notably D3(BJ). ORCA 6.1.1 does not use one invariant energy anchor for
+every TDA/TDDFT EnGrad path: `FINAL SINGLE POINT ENERGY` and the `.engrad`
+scalar can represent either the selected state or the reference state even
+though the force is for the requested excited root. The backend therefore
+parses the numeric dispersion correction, shifts the whole root window by that
+common amount, and audits whether the final scalar is anchored at root zero or
+the requested root. Energy-only excited-state jobs are checked against the
+entire parsed window because ORCA may report the first excited state, rather
+than root zero, as its final scalar. The anchor records scalar provenance and
+does not select the state followed by the optimizer.
+
+The raw native-gradient scalar must match either that audited final anchor or
+the same-geometry selected-state energy. It is retained as
+`last_orca_engrad_energy` on the calculator and in the native ORCA files, while
+the optimizer result contains only the selected-state energy from the complete
+root survey and its forces. This preserves excitation energies and puts
+optimizer energies, descent tests, and fallback ranking on the same excited-
+state energy scale. The correction, final scalar, and anchor are retained in
+the audit metadata.
 
 Implicit-solvent runs must also set `CPCMEQ` explicitly in the TDDFT block.
 ORCA's job-type defaults differ: an energy-only vertical calculation uses
