@@ -801,10 +801,15 @@ def _write_html(
 
 def _energy_svg_steps(steps: Sequence[StepData], roots: Sequence[int], value: str = "absolute") -> str:
     series = []
-    x_labels = {i: step.job.label for i, step in enumerate(steps)}
+    x_labels = {}
+    for i, step in enumerate(steps):
+        x = step.job.scan_step if step.job.scan_step is not None else i
+        x_labels[x] = step.job.label
+        
     for root in roots:
         pts = []
         for i, step in enumerate(steps):
+            x = step.job.scan_step if step.job.scan_step is not None else i
             st = step.states.get(root)
             if st is None:
                 y = None
@@ -812,7 +817,7 @@ def _energy_svg_steps(steps: Sequence[StepData], roots: Sequence[int], value: st
                 y = st.exc_ev
             else:
                 y = st.abs_energy_eh
-            pts.append((i, y))
+            pts.append((x, y))
         series.append((f"root {root}", pts))
     ylabel = "Excitation energy (eV)" if value == "excitation" else "Absolute energy (Eh)"
     return _line_svg(series, ylabel=ylabel, x_labels=x_labels)
@@ -822,12 +827,14 @@ def _energy_svg_tracks(result: TrackingResult, value: str = "absolute") -> str:
     series = []
     x_labels = {}
     for point in result.track_points:
-        x_labels.setdefault(point.step_order, point.step_label)
+        x = point.scan_step if point.scan_step is not None else point.step_order
+        x_labels[x] = point.step_label
+        
     for track in sorted({p.track_id for p in result.track_points}):
         if value == "excitation":
-            pts = [(p.step_order, p.excitation_ev, p.confidence, p.manifold_id) for p in result.track_points if p.track_id == track]
+            pts = [(p.scan_step if p.scan_step is not None else p.step_order, p.excitation_ev, p.confidence, p.manifold_id) for p in result.track_points if p.track_id == track]
         else:
-            pts = [(p.step_order, p.energy_eh, p.confidence, p.manifold_id) for p in result.track_points if p.track_id == track]
+            pts = [(p.scan_step if p.scan_step is not None else p.step_order, p.energy_eh, p.confidence, p.manifold_id) for p in result.track_points if p.track_id == track]
         series.append((f"track {track}", pts))
     ylabel = "Excitation energy (eV)" if value == "excitation" else "Absolute energy (Eh)"
     return _line_svg(series, ylabel=ylabel, x_labels=x_labels)
@@ -860,12 +867,16 @@ def _line_svg(series, ylabel: str = "Energy", x_labels: Optional[dict] = None) -
 
     colors = ["#1b6ca8", "#b23a48", "#26734d", "#8a5a00", "#6f42c1", "#008c8c", "#a33f00"]
     out = [f"<svg class='plot' viewBox='0 0 {w} {h}' role='img'>"]
-    x_tick_min = int(np.ceil(xmin))
-    x_tick_max = int(np.floor(xmax))
-    for x in range(x_tick_min, x_tick_max + 1):
+    
+    if x_labels:
+        tick_xs = sorted(x_labels.keys())
+    else:
+        tick_xs = [xmin + (xmax - xmin) * f for f in (0.0, 0.25, 0.5, 0.75, 1.0)]
+        
+    for x in tick_xs:
         px = sx(x)
         out.append(f"<line class='xgrid' x1='{px:.1f}' y1='{top}' x2='{px:.1f}' y2='{h-bottom}'/>")
-        label = str(x_labels.get(x, x)) if x_labels else str(x)
+        label = str(x_labels.get(x, f"{x:.4g}")) if x_labels else f"{x:.4g}"
         out.append(
             f"<text class='xtick' x='{px:.1f}' y='{h - bottom + 17}' "
             f"transform='rotate(-45 {px:.1f} {h - bottom + 17})'>{html.escape(label)}</text>"

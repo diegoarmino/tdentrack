@@ -153,13 +153,15 @@ value in the triplet block, so iroot alone cannot identify the printed root.
 Each parsed state therefore also records a stable one-based
 root_within_multiplicity ordinal for translating a global output root to the
 corresponding singlet or triplet root window. The dictionary key, root, and
-global_root fields are the mixed-file STATE N label; they must not be passed
-directly to ORCA's excited-state gradient IRoot when more than one multiplicity
-is present. Use the identical multiplicity-local orca_gradient_iroot field for
-the ORCA gradient input. For example, global triplet STATE 4 in a file with two
-preceding singlets has orca_gradient_iroot=2, not 4.
-The pysisyphus calculator adapter must perform this mapping before setting its
-ORCA root/IRoot value.
+global_root fields are the mixed-file STATE N label. For unrestricted
+open-shell calculations this global label is also the ORCA gradient IRoot,
+even when states with different approximate multiplicity are interleaved. The
+multiplicity-local orca_gradient_iroot field is instead the required
+translation for spin-adapted multiplicity blocks. For example, global triplet
+STATE 4 in a restricted singlet-plus-triplet file with two preceding singlets
+has orca_gradient_iroot=2 and must be selected with IRoot 2 and IRootMult
+triplet. The pysisyphus adapter chooses the convention from the reference type
+before setting ORCA's root/IRoot value.
 When all requested output roots have the same printed multiplicity, TDenTrack
 uses it as a parser filter and verifies the binary/output multiplicities and
 excitation energies agree.
@@ -698,8 +700,25 @@ For each gradient-evaluated geometry:
 3. ORCA BSON wavefunctions at the committed and proposed geometries provide the analytic cross matrix `S_AB = <AO(A)|AO(B)>`. This is the same adjacent-geometry superposition quantity sought by a double-molecule calculation, but it is evaluated directly from the two retained shell sets with `Wavefunction.S_with`. Atom order, coordinates, shell definitions, ECP data, AO ordering, MO orthonormality, and forward/reverse transpose symmetry are checked before it is used.
 4. The `.cis` amplitudes, `S_AB`, and the two same-geometry metrics produce a full signed root-overlap block plus both root self-overlap Gram matrices.
 5. `TrackingSession` returns `ACCEPT`, `MANIFOLD`, `RETRY`, or `HALT`. Only `ACCEPT` carries a committable root.
-6. pysisyphus stages the selected endpoint and requests an ORCA `EnGrad` calculation using the root's multiplicity-local `IRoot`. For triplets it also forces `IRootMult triplet`; `Triplets true` alone does not make ORCA 6.1.1's `IRoot` select the triplet block.
+6. pysisyphus stages the selected endpoint and requests an ORCA `EnGrad` calculation. A restricted spin-adapted triplet uses the root's multiplicity-local `IRoot` and explicitly sets `IRootMult triplet`; `Triplets true` alone does not make ORCA 6.1.1's `IRoot` select the triplet block. An unrestricted open-shell calculation instead uses the global printed `STATE N` ordinal as `IRoot N` and preserves CIS multiplicities separately for state-selection guards.
 7. A finite, geometry-matched successful gradient atomically commits both the electronic snapshot and geometry step. Before commitment, the adapter verifies normal termination and agreement among ORCA's echoed `IRoot`/`IRootMult`, `DE(CIS)` root marker, and state-of-interest report. `FollowIRoot true` and `TGradList` are rejected. Failure restores the prior root and leaves the snapshot uncommitted.
+
+ORCA's TDDFT state table combines the printed `E(SCF)` with excitation
+energies, but its final EnGrad energy can include state-independent terms added
+later, notably D3(BJ). The backend anchors the bootstrap's selected root—and
+root zero in an energy-only survey—to `FINAL SINGLE POINT ENERGY`, then applies
+that common correction to every state. This preserves excitation energies and
+puts optimizer energies, descent tests, and fallback ranking on the same total-
+energy scale. The correction and anchor are retained in the audit metadata.
+
+Implicit-solvent runs must also set `CPCMEQ` explicitly in the TDDFT block.
+ORCA's job-type defaults differ: an energy-only vertical calculation uses
+non-equilibrium LR-CPCM, whereas requesting an analytic excited-state gradient
+switches to equilibrium LR-CPCM. Because the transactional workflow alternates
+all-root energy surveys and selected-root gradients, an omitted `CPCMEQ` would
+silently compare different surfaces. The backend fails closed in that case.
+Use `CPCMEQ true` for the usual relaxed excited-state optimization, or
+explicitly choose `false` for a deliberately frozen-solvent calculation.
 
 All-root surveys retain their input, output, CIS, BSON, GBW, and a JSON audit manifest in unique directories. Restart data serialize only the last committed snapshot; pending or merely staged trials must be surveyed again.
 
@@ -714,7 +733,7 @@ When close roots form a candidate manifold, the selector extracts the matching s
 ### 20.3 Scope and current limitations
 
 - The integration is an opt-in Python API in the modified pysisyphus fork; it is not yet a stable YAML or TDenTrack CLI workflow.
-- The built-in backend is deliberately version-gated to ORCA 6.1.1 and assumes a fixed atom order, basis/ECP definition, charge, multiplicity, and contiguous multiplicity-local root window.
+- The built-in backend is deliberately version-gated to ORCA 6.1.1 and assumes a fixed atom order, basis/ECP definition, charge, multiplicity, and contiguous root window. Root ordinals are multiplicity-local for restricted spin-adapted blocks and global for unrestricted open-shell references.
 - Point charges and other per-call Hamiltonian inputs must be supplied identically to surveys and gradients.
 - Spin-flip CIS vectors are unsupported. Restricted ORCA 6.1.1 TDA is covered by a real binary fixture; non-TDA and unrestricted branches also have synthetic parser regressions but should be fixture-validated for the intended production method.
 - The legacy pysisyphus `track: true` ORCA implementation uses its older mutable tracker and raw-GBW parser. It is not part of this transaction path and should not be substituted for `TDenTrackORCA` under ORCA 6.1.1.

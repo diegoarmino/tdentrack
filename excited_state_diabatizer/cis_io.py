@@ -139,8 +139,11 @@ def parse_cis_amplitudes(
     an explicit guard against mixing spin manifolds. The optional tda hint
     resolves the otherwise binary-ambiguous case of one non-TDA X+Y/X-Y pair
     versus two exactly degenerate TDA records. Dictionary keys and global_root
-    are printed mixed-manifold STATE labels; ORCA gradient IRoot input must use
-    the separate multiplicity-local orca_gradient_iroot value.
+    are printed mixed-manifold STATE labels. For unrestricted open-shell
+    gradients this global label is ORCA's IRoot. The separate
+    multiplicity-local orca_gradient_iroot value is used only when selecting a
+    spin-adapted multiplicity block, such as restricted-reference triplets
+    with IRootMult triplet.
     """
 
     path = Path(path)
