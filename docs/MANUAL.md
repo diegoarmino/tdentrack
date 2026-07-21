@@ -716,14 +716,15 @@ entire parsed window because ORCA may report the first excited state, rather
 than root zero, as its final scalar. The anchor records scalar provenance and
 does not select the state followed by the optimizer.
 
-The raw native-gradient scalar must match either that audited final anchor or
-the same-geometry selected-state energy. It is retained as
-`last_orca_engrad_energy` on the calculator and in the native ORCA files, while
-the optimizer result contains only the selected-state energy from the complete
-root survey and its forces. This preserves excitation energies and puts
-optimizer energies, descent tests, and fallback ranking on the same excited-
-state energy scale. The correction, final scalar, and anchor are retained in
-the audit metadata.
+The native `.engrad` scalar must match the same-geometry selected-state energy.
+The ORCA adapter preserves that native, correction-inclusive value instead of
+replacing it with the uncorrected TDDFT state-table total. It is retained as
+`last_orca_engrad_energy` on the calculator and in the ORCA files. The
+transactional optimizer result contains only the corrected selected-state
+energy and forces; the legacy uncorrected `all_energies` array is removed. This
+preserves excitation energies and puts optimizer energies, descent tests, and
+fallback ranking on the same excited-state energy scale. The correction, final
+scalar, and anchor are retained in the audit metadata.
 
 Implicit-solvent runs must also set `CPCMEQ` explicitly in the TDDFT block.
 ORCA's job-type defaults differ: an energy-only vertical calculation uses
