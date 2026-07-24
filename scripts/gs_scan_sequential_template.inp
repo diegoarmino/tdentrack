@@ -1,0 +1,13 @@
+! UKS libxc(wb97x-d3bj) def2-SVP def2/J RIJCOSX CPCM(Acetonitrile) VeryTightSCF DEFGRID3 Opt
+
+%MaxCore 1000
+
+%Pal
+  nprocs 16
+end
+
+${guess_block}
+
+${constraints_block}
+
+* xyzfile ${charge} ${mult} ${xyzfile}

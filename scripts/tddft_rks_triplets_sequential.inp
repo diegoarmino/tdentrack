@@ -1,0 +1,23 @@
+! libxc(wb97x-d3bj) RKS def2-SVP def2/J RIJCOSX CPCM(Acetonitrile) VeryTightSCF KeepDens KeepTransDensity DEFGRID3
+
+%basis
+  NewGTO Ru "def2-TZVP" end
+end
+
+%MaxCore 2000
+
+%Pal
+  nprocs 16
+end
+
+%tddft
+  nroots 30
+  triplets true
+  iroot 1
+  irootmult Triplet
+${tddft_restart}
+end
+
+${guess_block}
+
+* xyzfile ${charge} ${mult} ${xyzfile}

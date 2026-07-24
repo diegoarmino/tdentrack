@@ -16,6 +16,11 @@
 !excited_state_diabatizer/tests/
 !excited_state_diabatizer/tests/*.py
 
+!scripts/
+!scripts/*.py
+!scripts/*.inp
+!scripts/*.md
+
 # Never track generated Python caches.
 __pycache__/
 *.py[cod]
